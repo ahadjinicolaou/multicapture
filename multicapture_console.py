@@ -44,19 +44,31 @@ def initializeCameras():
     validated = validateCameras(cameras)
     return (validated, (nCameras if validated else 0))
 
-# returns TRUE if the camera video modes and frame rates were set correctly
-# (returns FALSE otherwise)
-# NOTE: some attribute names in a cfg = cam.getConfiguration() object need an
-# extra space at the end, e.g. speed = getattr(cfg,"asyncBusSpeed ")
 def validateCameras(cameras):
     nCameras = len(cameras)
     userRateCode = getFrameRateCode(config["DEFAULT"]["frameRate"])
     userVideoCode = getVideoModeCode(config["DEFAULT"]["videoMode"])
+    userAsyncCode = getBusSpeedCode(config["DEFAULT"]["asyncBusSpeed"])
+    userIsochCode = getBusSpeedCode(config["DEFAULT"]["isochBusSpeed"])
     for ii in range(nCameras):
         cam = cameras[ii]
+        cfg = cam.getConfiguration()
+
+        # validation fails if the camera video mode/frame rate couldn't be set
         videoCode, rateCode = cam.getVideoModeAndFrameRate()
         if videoCode is not userVideoCode or rateCode is not userRateCode:
-            print ("cam{}: requested video mode/frame rate could not be set.".format(ii))
+            print("cam{}: requested video mode/frame rate could not be set.".format(ii))
+            return False
+
+        # warn the user if async/isoch speed differ from requested config
+        # note that these attribute names need an extra space at the end!
+        asyncCode = getattr(cfg,"asyncBusSpeed ")
+        isochCode = getattr(cfg,"isochBusSpeed ")
+        if asyncCode is not userAsyncCode:
+            print("cam{}: requested async bus speed could not be set.".format(ii))
+        if isochCode is not userIsochCode:
+            print("cam{}: requested isoch bus speed could not be set.".format(ii))
+        if asyncCode is not userAsyncCode or isochCode is not userIsochCode:
             return False
 
     return True
@@ -206,10 +218,6 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
         # increment the video counter (unless interrupted)
         if capturingVideo: nVideos += 1
 
-    # clean up
-    del vid
-    print("\t\t{}: wrapping up thread.".format(processName))
-
 def makeDirectories(nCameras):
     setSessionName()
     sessionPath = os.path.join(config["DEFAULT"]["dataPath"], config["DEFAULT"]["sessionName"])
@@ -255,7 +263,7 @@ def printSessionSummary(tStart, tEnd, sessionPath):
         nHours, rem = divmod(rem, 60*60)
         nMins, nSecs = divmod(rem, 60)
         print("\n\tSession ended @ {} ({:0.0f} d {:0.0f} hr {:0.0f} min {:0.0f} sec).".format(
-            getTimestamp(tEnd), nHours, nMins, nSecs))
+            getTimestamp(tEnd), nDays, nHours, nMins, nSecs))
     else:
         nHours, rem = divmod(totalSecs, 60*60)
         nMins, nSecs = divmod(rem, 60)
