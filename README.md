@@ -17,6 +17,9 @@ Each output video file (e.g. `cam0_000168.avi`) will be accompanied by a frame t
 
 The program will acquire video indefinitely until it receives a keyboard interrupt via CTRL-C, after which the current video file will be finalized and a summary of the captured video data will be printed.
 
+To record video for a fixed duration (seconds), run the command:
+`python multicapture_console.py -t <duration>`
+
 # Issues
 Unfortunately, as of the time of writing, the video files are initially prefixed with "-0000" (e.g. `cam0_000168-0000.avi`) after closure. To accommodate for this, at the end of each recording session, the video filenames are checked against the frame timing filenames and renamed accordingly.
 

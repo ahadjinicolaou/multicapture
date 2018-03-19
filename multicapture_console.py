@@ -123,10 +123,16 @@ def setAnalogOutputLow(address):
 
 def captureVideo(idxCam, config, startEvent, abortEvent):
     nVideos = 0
+    nFrames = 0
     videoType = config["DEFAULT"]["videoType"]
     videoDuration = config["DEFAULT"].getfloat("videoDuration")
     frameRate = config["DEFAULT"].getfloat("frameRate")
+    nPulseFrames = int(config["DEFAULT"].getfloat("analogOutDuration") * frameRate)
+    nPeriodFrames = int(config["DEFAULT"].getfloat("analogOutPeriod") * frameRate)
+    nSessionFrames = int(config["DEFAULT"].getfloat("sessionDuration") * frameRate)
     nVideoFrames = int(videoDuration * frameRate)
+
+    recordIndefinitely = nSessionFrames == 0
 
     ext = getVideoExtension(videoType)
     cameraName = "cam{:01}".format(idxCam)
@@ -138,8 +144,6 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
     # get the analog input mapping for frame code output
     pinMap, maxValue = getAnalogPinMap(config["DEFAULT"]["analogPinMap"])
     address = int(config["DEFAULT"]["analogOutAddress"], base=16)
-    nPulseFrames = int(config["DEFAULT"].getfloat("analogOutDuration") * frameRate)
-    nPeriodFrames = int(config["DEFAULT"].getfloat("analogOutPeriod") * frameRate)
     analogValue = 1
 
     # get and connect the camera
@@ -169,12 +173,18 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
         elif videoType == "AVI":
             vid.AVIOpen(filename=videoFilePath.encode("utf8"), framerate=frameRate)
 
-        with open(logFilePath, "w") as log:
+        with open(logFilePath, 'w') as log:
             # acquire and append camera images indefinitely until
             # the user cancels the operation
             for ii in range(nVideoFrames):
-                if abortEvent.is_set():
+                # end session if recording duration exceeds user specified
+                # duration or if user aborts
+                if recordIndefinitely and abortEvent.is_set():
                     capturingVideo = False
+                    break
+                elif nFrames >= nSessionFrames
+                    capturingVideo = False
+                    abortEvent.set()
                     break
 
                 try:
@@ -182,6 +192,7 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
                     image = camera.retrieveBuffer()
                     vid.append(image)
                     log.write("{}\t{}\n".format(ii+1, getTimestamp(datetime.now())))
+                    nFrames += 1
                 except PyCapture2.Fc2error as error:
                     print("{}: error retrieving buffer ({}): dropping frame {}.".format(processName, error, ii))
                     continue
@@ -235,7 +246,7 @@ def makeDirectories(nCameras):
 def pinMapFromSpec(spec):
     pinMap = list(spec)
     for idx, e in enumerate(pinMap):
-        pinMap[idx] = None if e == "-" else int(e)
+        pinMap[idx] = None if e == '-' else int(e)
     return pinMap
 
 def getAnalogPinMap(spec):
@@ -309,12 +320,12 @@ def checkVideoData(sessionPath, nCameras):
         # rename video filenames
         if namesAreDifferent:
             for name in vidFiles:
-                os.rename(os.path.join(path,name[0]), os.path.join(path,name[0].replace("-0000","")))
+                os.rename(os.path.join(path,name[0]), os.path.join(path,name[0].replace("-0000",'')))
 
         print("\t * {}: {} videos ({:1.1f} GB) [{}{}]".format(
             cameraName, nVideos, vidSize,
-            "r" if namesAreDifferent else "-",
-            "M" if diffVidTxtCount else "-"))
+            'r' if namesAreDifferent else '-',
+            'M' if diffVidTxtCount else '-'))
 
 # adapted from https://gist.github.com/dideler/2395703
 def getOptions(argv):
@@ -334,7 +345,7 @@ def getOptions(argv):
         if argv[0][0] == "-":
             if argv[0] in opts:
                 opts[argv[0]].append(argv[1])
-            elif argv[0] == "-r":
+            elif argv[0] in ('-r','-t'):
                 opts[argv[0]] = [argv[1]]
             else:
                 print("\tInvalid option: {}.".format(argv[0]))
@@ -355,6 +366,7 @@ config.read("config.ini")
 # now set some options invisible to the end user
 config["DEFAULT"]["asyncBusSpeed"] = "ANY"
 config["DEFAULT"]["isochBusSpeed"] = "S400"
+config["DEFAULT"]["sessionDuration"] = "0"
 
 validVideoTypes = ("H264", "MJPG", "AVI")
 validVideoModes = ("640x480_Y8")
@@ -363,7 +375,20 @@ if __name__ == "__main__":
 
     from sys import argv
     options = getOptions(argv)
-    if not options:
+
+    if "-r" in options:
+        # check the directory offered by the user, look for cam* directories
+        sessionPath = options["-r"][0]
+        dirs = listCamDirsInPath(sessionPath)
+        if len(dirs) > 0:
+            print("\n\tExisting video directory: {}".format(sessionPath))
+            nCameras = len(dirs)
+        else:
+            print("\n\tNo camera folders found in this directory.")
+            sys.exit(0)
+    else:
+        # record indefinitely unless the user specifies a session duration
+        if "-t" in options: config["DEFAULT"]["sessionDuration"] = options["-t"][0]
         address = int(config["DEFAULT"]["analogOutAddress"], base=16)
         setAnalogOutputLow(address)
         camerasStarted, nCameras = initializeCameras()
@@ -398,6 +423,7 @@ if __name__ == "__main__":
         startEvent.set()
         print("\tSession started @ {}.\n".format(getTimestamp(tStart)))
 
+        tEnd = None
         # main thread waits around until interrupted by the user
         while not abortEvent.is_set():
             try:
@@ -407,20 +433,17 @@ if __name__ == "__main__":
                 abortEvent.set()
                 tEnd = datetime.now()
                 setAnalogOutputLow(address)
-                time.sleep(0.5)
+
+        # if we reached this point and tEnd wasn't set, the session had a
+        # fixed duration (specified by the user)
+        if tEnd is None:
+            tEnd = datetime.now()
+            setAnalogOutputLow(address)
+
+        time.sleep(0.1)
 
         # summarize video data and correct filenames if needed
         printSessionSummary(tStart, tEnd, sessionPath)
-    else:
-        # check the directory offered by the user, look for cam* directories
-        sessionPath = options["-r"][0]
-        dirs = listCamDirsInPath(sessionPath)
-        if len(dirs) > 0:
-            print("\n\tExisting video directory: {}".format(sessionPath))
-            nCameras = len(dirs)
-        else:
-            print("\n\tNo camera folders found in this directory.")
-            sys.exit(0)
 
     checkVideoData(sessionPath, nCameras)
     sys.exit(0)
