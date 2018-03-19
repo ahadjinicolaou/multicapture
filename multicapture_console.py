@@ -271,7 +271,14 @@ def printSessionSummary(tStart, tEnd, sessionPath):
             getTimestamp(tEnd), nHours, nMins, nSecs))
 
 def listFilesInPath(path, fExt):
-    return [(f, os.path.getsize(os.path.join(path,f))) for f in os.listdir(path) if f.endswith("." + fExt)]
+    if not os.path.isdir(path): return []
+    return [(f, os.path.getsize(os.path.join(path,f))) for f in os.listdir(path)
+        if f.endswith("." + fExt)]
+
+def listCamDirsInPath(path):
+    if not os.path.isdir(path): return []
+    return [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))
+        and d.startswith("cam")]
 
 def checkVideoData(sessionPath, nCameras):
     videoType = config["DEFAULT"]["videoType"]
@@ -295,7 +302,7 @@ def checkVideoData(sessionPath, nCameras):
 
         # check to see if filenames are different, and if they are, it's
         # likely the video file that has the extra -0000 prefix
-        namesAreDifferent = len(vidFiles[0]) == len(txtFiles[0])
+        namesAreDifferent = len(vidFiles[0][0]) != len(txtFiles[0][0])
         # something's up if the number of text/avi files don't match
         diffVidTxtCount = nVideos != nLogs
 
@@ -309,7 +316,31 @@ def checkVideoData(sessionPath, nCameras):
             "r" if namesAreDifferent else "-",
             "M" if diffVidTxtCount else "-"))
 
+# adapted from https://gist.github.com/dideler/2395703
+def getOptions(argv):
+    opts = {}
+    isValid = False
+    while argv:
+        # enforce name/value option pairs
+        if not isValid:
+            nArgs = len(argv)-1 % 2
+            isValid = nArgs % 2 == 0
+            if isValid:
+                continue
+            else:
+                print("\tOptions must come in name/value pairs.")
+                sys.exit(0)
 
+        if argv[0][0] == "-":
+            if argv[0] in opts:
+                opts[argv[0]].append(argv[1])
+            elif argv[0] == "-r":
+                opts[argv[0]] = [argv[1]]
+            else:
+                print("\tInvalid option: {}.".format(argv[0]))
+                sys.exit(0)
+        argv = argv[1:]
+    return opts
 
 
 # load configuration from file
@@ -329,52 +360,67 @@ validVideoTypes = ("H264", "MJPG", "AVI")
 validVideoModes = ("640x480_Y8")
 
 if __name__ == "__main__":
-    address = int(config["DEFAULT"]["analogOutAddress"], base=16)
-    setAnalogOutputLow(address)
-    camerasStarted, nCameras = initializeCameras()
-    directoriesMade = makeDirectories(nCameras)
-    if camerasStarted and directoriesMade:
-        sessionPath = os.path.join(config["DEFAULT"]["dataPath"], config["DEFAULT"]["sessionName"])
-        # copy the current configuration file into the session directory
-        with open(os.path.join(sessionPath,"config.ini"), 'w') as configfile:
-            config.write(configfile)
-        print("\n\tCameras ({}) initialized successfully.".format(nCameras))
-        print("\tVideo directory: {}".format(sessionPath))
+
+    from sys import argv
+    options = getOptions(argv)
+    if not options:
+        address = int(config["DEFAULT"]["analogOutAddress"], base=16)
+        setAnalogOutputLow(address)
+        camerasStarted, nCameras = initializeCameras()
+        directoriesMade = makeDirectories(nCameras)
+        if camerasStarted and directoriesMade:
+            sessionPath = os.path.join(config["DEFAULT"]["dataPath"], config["DEFAULT"]["sessionName"])
+            # copy the current configuration file into the session directory
+            with open(os.path.join(sessionPath,"config.ini"), 'w') as configfile:
+                config.write(configfile)
+            print("\n\tCameras ({}) initialized successfully.".format(nCameras))
+            print("\tVideo directory: {}".format(sessionPath))
+        else:
+            if not camerasStarted: print("\n\tCamera initialization failed.")
+            elif not directoriesMade: print("\n\tCould not create directories.")
+            sys.exit(0)
+
+        # capture start/abort events
+        startEvent = mp.Event()
+        abortEvent = mp.Event()
+
+        processes = []
+        for ii in range(nCameras):
+            processName = "p-cam{}".format(ii)
+            p = mp.Process(name=processName, target=captureVideo,
+                args=(ii, config, startEvent, abortEvent))
+            p.start()
+            processes.append(p)
+
+        # send the start capture signal
+        time.sleep(0.1)
+        tStart = datetime.now()
+        startEvent.set()
+        print("\tSession started @ {}.\n".format(getTimestamp(tStart)))
+
+        # main thread waits around until interrupted by the user
+        while not abortEvent.is_set():
+            try:
+                time.sleep(0.1)
+            except KeyboardInterrupt:
+                print("\tAborting video capture.")
+                abortEvent.set()
+                tEnd = datetime.now()
+                setAnalogOutputLow(address)
+                time.sleep(0.5)
+
+        # summarize video data and correct filenames if needed
+        printSessionSummary(tStart, tEnd, sessionPath)
     else:
-        if not camerasStarted: print("\n\tCamera initialization failed.")
-        elif not directoriesMade: print("\n\tCould not create directories.")
-        sys.exit(0)
+        # check the directory offered by the user, look for cam* directories
+        sessionPath = options["-r"][0]
+        dirs = listCamDirsInPath(sessionPath)
+        if len(dirs) > 0:
+            print("\n\tExisting video directory: {}".format(sessionPath))
+            nCameras = len(dirs)
+        else:
+            print("\n\tNo camera folders found in this directory.")
+            sys.exit(0)
 
-    # capture start/abort events
-    startEvent = mp.Event()
-    abortEvent = mp.Event()
-
-    processes = []
-    for ii in range(nCameras):
-        processName = "p-cam{}".format(ii)
-        p = mp.Process(name=processName, target=captureVideo,
-            args=(ii, config, startEvent, abortEvent))
-        p.start()
-        processes.append(p)
-
-    # send the start capture signal
-    time.sleep(0.1)
-    tStart = datetime.now()
-    startEvent.set()
-    print("\tSession started @ {}.\n".format(getTimestamp(tStart)))
-
-    # main thread waits around until interrupted by the user
-    while not abortEvent.is_set():
-        try:
-            time.sleep(0.1)
-        except KeyboardInterrupt:
-            print("\tAborting video capture.")
-            abortEvent.set()
-            tEnd = datetime.now()
-            setAnalogOutputLow(address)
-            time.sleep(0.5)
-
-    # summarize video data and correct filenames if needed
-    printSessionSummary(tStart, tEnd, sessionPath)
     checkVideoData(sessionPath, nCameras)
     sys.exit(0)
