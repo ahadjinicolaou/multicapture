@@ -182,7 +182,7 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
                 if recordIndefinitely and abortEvent.is_set():
                     capturingVideo = False
                     break
-                elif nFrames >= nSessionFrames
+                elif not recordIndefinitely and nFrames >= nSessionFrames:
                     capturingVideo = False
                     abortEvent.set()
                     break
