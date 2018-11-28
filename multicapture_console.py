@@ -3,6 +3,7 @@ import PyCapture2
 import os
 import sys
 import logging
+import random
 import time
 from datetime import date, datetime, timedelta
 
@@ -121,6 +122,9 @@ def setAnalogOutputHigh(address):
 def setAnalogOutputLow(address):
     windll.inpoutx64.Out32(address, 0)
 
+def getRandomFrameOffset(maxOffset, frameRate):
+    return int(random.uniform(-maxOffset, maxOffset) * frameRate)
+
 def captureVideo(idxCam, config, startEvent, abortEvent):
     nVideos = 0
     nFrames = 0
@@ -131,6 +135,10 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
     nPeriodFrames = int(config["DEFAULT"].getfloat("analogOutPeriod") * frameRate)
     nSessionFrames = int(config["DEFAULT"].getfloat("sessionDuration") * frameRate)
     nVideoFrames = int(videoDuration * frameRate)
+
+    # initialize our random frame offset
+    maxPeriodOffset = config["DEFAULT"].getfloat("analogOutPeriodRange")
+    nOffsetFrames = nPeriodFrames + getRandomFrameOffset(maxPeriodOffset, frameRate)
 
     recordIndefinitely = nSessionFrames == 0
 
@@ -174,6 +182,9 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
             vid.AVIOpen(filename=videoFilePath.encode("utf8"), framerate=frameRate)
 
         with open(logFilePath, 'w') as log:
+            # the frame of the first trigger
+            lastTriggerFrame = 0
+
             # acquire and append camera images indefinitely until
             # the user cancels the operation
             for ii in range(nVideoFrames):
@@ -209,11 +220,15 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
                             setAnalogOutputValue(0, pinMap, address)
                         elif ii == 3*nPulseFrames:
                             setAnalogOutputValue(nVideos % (maxValue + 1), pinMap, address)
-                        elif ii > 4*nPulseFrames and ii % nPeriodFrames == 0:
+                        elif ii > 4*nPulseFrames and (ii - lastTriggerFrame) == nOffsetFrames:
                             setAnalogOutputValue(analogValue, pinMap, address)
                             analogValue = analogValue+1 if analogValue < maxValue else 1
-                        elif ii > 4*nPulseFrames and ii % nPeriodFrames == nPulseFrames:
+                            lastTriggerFrame = ii
+                        elif ii > 4*nPulseFrames and (ii - lastTriggerFrame) == nPulseFrames:
                             setAnalogOutputLow(address)
+                            # set a new random trigger shift
+                            nOffsetFrames = nPeriodFrames + getRandomFrameOffset(maxPeriodOffset, frameRate)
+
                 except:
                     pass
 
