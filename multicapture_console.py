@@ -152,7 +152,6 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
     # get the analog input mapping for frame code output
     pinMap, maxValue = getAnalogPinMap(config["DEFAULT"]["analogPinMap"])
     address = int(config["DEFAULT"]["analogOutAddress"], base=16)
-    analogValue = 1
 
     # get and connect the camera
     bus = PyCapture2.BusManager()
@@ -184,6 +183,7 @@ def captureVideo(idxCam, config, startEvent, abortEvent):
         with open(logFilePath, 'w') as log:
             # the frame of the first trigger
             lastTriggerFrame = 0
+            analogValue = 1
 
             # acquire and append camera images indefinitely until
             # the user cancels the operation
